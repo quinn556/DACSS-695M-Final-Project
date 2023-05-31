@@ -1,0 +1,525 @@
+---
+title: "Model Prediction on House Prices in Ames, Iowa"
+author: "Quinn He"
+date: "2023-05-25"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r include=FALSE}
+library(tidyverse)
+library(mltools)
+library(MASS)
+library(caret)
+library(e1071)
+library(ISLR2)
+library(boot)
+library(nnet)
+library(caTools)
+library(rsample)
+library(MLmetrics)
+library(tidymodels)
+library(GGally)
+library(recipes)
+library(DataExplorer)
+library(discrim)
+library(randomForest)
+library(tinytex)
+library(glmnet)
+library(Metrics)
+
+```
+
+```{r include=F}
+
+train.house <- read_csv("train.csv")
+
+```
+
+# Motivations
+
+House prices are difficult to predict due to the countless number of variables and outside influences on the housing market as a whole. With data available from a 2016 Kaggle competition to predict house prices in Ames, Iowa, I plan to use supervised learning methods to predict the final sale price of houses. I have recently been interested in what goes into a home's sale price. As buying a home becomes more of a distant dream than a grounded reality for many young Americans, I am curious to see if I can create a model that helps predict sale prices in certain areas. While the data is only a sample of homes in Ames, Iowa, I hope I am able to figure out which models perform best on house prices with data that is a mix of quantitative and qualitative variables.
+
+There are too many variables that combine together to inform a final sale price of a home. For a human to complete a project by hand that accounts for all these variables would be near impossible. By using machine learning principles I hope to accurately predict the prices of houses in Ames, Iowa. The models I create in the project will not be applicable to other house locations and that is a huge limitation to the project that should be accounted for. Certain geographic areas tend to me more expensive than others due to a variety of outside factors. Many of the homes in this data set are one story, single family homes so a model run here would not be sufficient to use to predict other areas, but it can be a start. With housing prices, the market is influenced by outside sources unaccounted for in the data set. Random financial fluctuations or recent natural disasters can be difficult to predict and is far outside the scope of this project. 
+
+The goal of this project is to use supervised learning methods to predict house sale prices given the 80 variables in the data set. I will implement forms of random forests, K-nearest neighbors, Ridge Regression, and Lasso machine learning models to make predictions on a testing data set. These models will help predict house prices given variables are constant and related to the house features. 
+
+More information about the data set can be found at the link below.
+https://www.kaggle.com/competitions/house-prices-advanced-regression-techniques/overview
+
+# EDA
+
+There is an evenly balanced make up of discrete and continuous variables within the data. With almost 7000 missing variables, I will have to find a way of getting rid of them since some of the models do not perform well with NAs. With 1460 rows, I can conclude that number of houses should be sufficient to train a model.
+```{r}
+introduce(train.house)
+```
+I can conclude most of the houses in the training set are 1 family, 1 story homes with a gable roof. The foundations are primarily of poured concrete or cinderblock construction. Most of the homes do not have a fence. Many variables pertain to the quality of certain aspects of the home (foundation, roof, fence, etc.) and a majority of them are of normal/average quality with little variation. Most of the homes are registered as Residential Low Density homes. 
+
+Most of the homes do not have a pool, fence, or other features such as a shed. Based on the distribution of almost all of the variables, many of them consist of just one type of observation.
+
+Below, I am able to see the frequency of the categorical variables. 
+
+```{r}
+plot_bar(train.house)
+```
+
+The initial data set pre-split has 1460 observations with 81 variables (79 of which are explanatory variables).  
+
+```{r}
+dim(train.house)
+```
+
+Based on this distribution, it appears most of the homes have a final sale price of just under $200,000 in the training data set. It may be beneficial to remove some of the extreme outliers if possible.
+
+```{r}
+options(scipen = 999)#to get rid of scientific notation in graphs
+ggplot(train.house, aes(x = SalePrice))+
+  geom_histogram()+
+  labs(title = "Distribution of SalePrice in data set")
+```
+
+```{r}
+ggplot(train.house, aes(x = SalePrice))+
+  geom_boxplot()+
+  labs(title="Boxplot of SalePrice to understand outliers")
+```
+
+With this graph, I am trying to see if a particular style of house tends to be of an overall condition, but I am not seeing much of a relationship as there is a an even distribution of house stypes among the conditions.
+
+```{r}
+options(scipen = 999)#to get rid of scientific notation in graphs
+ggplot(train.house, aes(x = OverallCond, fill = HouseStyle))+
+  geom_bar()+
+  labs(title = "Distribution of overall condition of homes grouped by house style")
+```
+
+It looks like there is a slight dip in sales in 2008, but I am surprised the very next year sales returned to normal. The drop in 2010 is probably caused by the data collection ending. The house style is relatively evenly distributed across the years. 
+
+```{r}
+train.house %>% 
+  ggplot(aes(x = YrSold, fill = HouseStyle))+
+  geom_bar()+
+  labs(title = "Distribution of homes based on year sold")
+```
+
+Most of the homes are located in the NAmes neighborhood. The second most popular location is the CollgCr area. Most of the homes in both of these neighborhoods are going to be 1 story. 
+
+```{r}
+
+train.house %>% 
+  ggplot(aes(x = Neighborhood, fill = HouseStyle))+
+  geom_bar()+
+  theme(axis.text.x = element_text(angle = 90, hjust =1))+
+  labs(title = "Homes sold based on where they were sold")
+  
+```
+
+# Evaluation Metric
+
+From looking at online literature and by observing previous classroom work, I concluded I will use root mean squared log error to calculate and compare different Random Forest, k-NN, Ridge Regression models, and Lasso. RMSE is usually considered the standard for regression type models, but RMSLE is up-and-coming and I wanted to give it a try. RMSLE is an especially useful metric for this project because it deals with outliers very well. RMSE is drastically impacted by outliers, but RMSLE has a robustness to them and is not impacted much. RMSLE also penalizes underestimation of the actual value more severely than it does for overestimating of values.
+
+# PreProcessing
+
+With functions from DataExplorer, I can observe PoolQC has 99.5% NA values, MiscFeature has 96.3%, Alley has 93%, and FirePlaceQu has 80% missing values. I may elect to get rid of those all together because I have more than enough explanatory variables to run with my models. LotFrontage is missing about 50% of the values in its columns. I will create dummy variables for all the columns where NA means that a feature is not present at the property.
+
+```{r}
+plot_missing(train.house)
+```
+
+Here is another look at the NA values in the data set.
+
+```{r}
+colSums(is.na(train.house))
+```
+
+For MiscFeature, I plan to just create a new column that is a binary for indicating if a misc feature is present or not and the same goes for Alley. The NA values in PoolQC indicate "No Pool", so I will make NA into "No Pool". FirePlaceQu stands for Fire Place Quality with NA indicating no fire place. Again, the same set of procedures mentioned will have to be implemented here. 
+
+No matter what I do, I cannot get rid of the PoolQC NA values so I will be making binary outcomes and then getting rid of the other columns. The following variables below I turned into dummy variables to deal with NAs and then the original variables are deleted. 
+
+```{r}
+train.house <- train.house %>% 
+  mutate(pool_avail = if_else(is.na(PoolQC), 0, 1)) %>% 
+  mutate(misc_feature_avail = if_else(is.na(MiscFeature), 0,1)) %>% 
+  mutate(fireplacequ = if_else(is.na(FireplaceQu), 0,1)) %>% 
+  mutate(fence_avail = if_else(is.na(Fence), 0, 1))
+
+train.house$pool_avail <- as.factor(train.house$pool_avail)
+train.house$misc_feature_avail <- as.factor(train.house$misc_feature_avail)
+train.house$fireplacequ <- as.factor(train.house$fireplacequ)
+
+```
+
+```{r}
+
+#Remove the Alley column
+train.house$Alley = NULL
+#Remove the PoolQC column
+train.house$PoolQC = NULL
+#Remove the MiscFeature column
+train.house$MiscFeature = NULL
+#Remove FireplaceQU
+train.house$FireplaceQu = NULL
+#remove Fense
+train.house$Fence = NULL
+
+#Function to see what the percentage of NA values exist in the data frame.
+sum(is.na(train.house))/prod(dim(train.house))
+
+colSums(is.na(train.house))
+```
+
+Since there are still NA values in a few of the columns, I will go through them and switch NA to "No..." since an NA value in one of these columns would signify the absence of a feature. NA values will make future model predictions difficult so I will get rid of them before as part of preprocessing.
+
+```{r}
+
+train.house$LotFrontage[is.na(train.house$LotFrontage)] <- 0
+
+train.house$BsmtQual <- ifelse(is.na(train.house$BsmtQual), "No basement", train.house$BsmtQual)
+train.house$BsmtCond <- ifelse(is.na(train.house$BsmtCond), "No basement", train.house$BsmtCond)
+train.house$BsmtExposure <- ifelse(is.na(train.house$BsmtExposure ), "No basement", train.house$BsmtExposure)
+train.house$BsmtFinType1 <- ifelse(is.na(train.house$BsmtFinType1), "No basement", train.house$BsmtFinType1)
+train.house$BsmtFinType2 <- ifelse(is.na(train.house$BsmtFinType2), "No basement", train.house$BsmtFinType2)
+
+train.house$GarageType <- ifelse(is.na(train.house$GarageType), "No garage", train.house$GarageType)
+train.house$GarageYrBlt <- ifelse(is.na(train.house$GarageYrBlt), "No garage", train.house$GarageYrBlt)
+train.house$GarageFinish <- ifelse(is.na(train.house$GarageFinish), "No garage", train.house$GarageFinish)
+train.house$GarageQual <- ifelse(is.na(train.house$GarageQual), "No garage", train.house$GarageQual)
+train.house$GarageCond <- ifelse(is.na(train.house$GarageCond), "No garage", train.house$GarageCond)
+
+```
+
+Since most of the NA values are gone at this point, I am comfortable just completely omitting any additional NA values since it no longer makes up a significant portion of the data.
+
+```{r}
+
+train.house <- na.omit(train.house)
+
+dim(train.house)
+```
+
+As part of a tidy data practice, variables that begin with numbers will always prove to cause issues with R so I am just doing a column rename below.
+
+```{r}
+train.house <- train.house %>% 
+  rename("first_floor_SF" = "1stFlrSF",
+         "second_floor_SF" = "2ndFlrSF",
+         "three_ssn_porch" = "3SsnPorch")
+
+```
+
+I also need to check if categorical variables are labeled correctly as a factor.
+
+```{r}
+str(train.house)
+```
+
+Most of the categorical variables are incorrectly labeled as characters. It is common practice for a categorical variable to be a factor so, manually, I make those adjustments below. When I attempted to do complete this task with a function, I never got the intended results, hence why I end up doing it by hand.
+
+```{r}
+train.house$MSZoning <- as.factor(train.house$MSZoning)
+train.house$Street <- as.factor(train.house$Street)
+train.house$LotShape <- as.factor(train.house$LotShape)
+train.house$LandContour  <- as.factor(train.house$LandContour)
+train.house$LotConfig <- as.factor(train.house$LotConfig)
+train.house$LandSlope <- as.factor(train.house$LandSlope)
+train.house$Condition1 <- as.factor(train.house$Condition1)
+train.house$Condition2 <- as.factor(train.house$Condition2)
+train.house$BldgType <- as.factor(train.house$BldgType)
+train.house$HouseStyle <- as.factor(train.house$HouseStyle)
+
+train.house$RoofStyle <- as.factor(train.house$RoofStyle)
+train.house$RoofMatl <- as.factor(train.house$RoofMatl)
+train.house$MasVnrType <- as.factor(train.house$MasVnrType)
+train.house$ExterQual <- as.factor(train.house$ExterQual)
+train.house$ExterCond <- as.factor(train.house$ExterCond)
+train.house$Foundation <- as.factor(train.house$Foundation)
+train.house$BsmtCond <- as.factor(train.house$BsmtCond)
+train.house$BsmtQual <- as.factor(train.house$BsmtQual)
+train.house$BsmtExposure <- as.factor(train.house$BsmtExposure)
+train.house$BsmtFinType1 <- as.factor(train.house$BsmtFinType1)
+train.house$BsmtFinType2 <- as.factor(train.house$BsmtFinType2)
+train.house$Heating <- as.factor(train.house$Heating)
+train.house$HeatingQC <- as.factor(train.house$HeatingQC)
+train.house$Electrical <- as.factor(train.house$Electrical)
+train.house$CentralAir <- as.factor(train.house$CentralAir)
+
+train.house$KitchenQual <- as.factor(train.house$KitchenQual)
+train.house$Functional <- as.factor(train.house$Functional)
+train.house$GarageType <- as.factor(train.house$GarageType)
+train.house$GarageFinish <- as.factor(train.house$GarageFinish)
+train.house$GarageQual <- as.factor(train.house$GarageQual)
+train.house$GarageCond <- as.factor(train.house$GarageCond)
+train.house$PavedDrive <- as.factor(train.house$PavedDrive)
+train.house$SaleType <- as.factor(train.house$SaleType)
+train.house$SaleCondition <- as.factor(train.house$SaleCondition)
+
+```
+
+I got an error when I ran models the first time around with predictors that are categorical or factors with only one value. It looks like the Utilities column only contains 1 unique variable, which means this may be the source of my errors. I will have to get rid of it so that models can run smoothly. 
+
+```{r}
+sapply(lapply(train.house, unique), length)
+```
+
+```{r}
+
+train.house$Utilities = NULL
+
+```
+
+That was the final step and the preprocessing should lead smoothly into model fitting.
+
+# Fit Models
+
+## Validation and training set of train.house
+
+For the project, I am using the training set, but splitting it into a training and testing set. 
+```{r}
+set.seed(12356)
+
+split <- initial_split(train.house, prop = 0.75)
+
+training.house <- training(split)
+testing.house <- testing(split)
+
+dim(training.house)
+dim(testing.house)
+
+```
+
+## Random Forest
+
+This initial model is run on default value parameters for regression problems. The next model is run by increasing a few of the numbers to see if another Random Forest model would fit the data better. 
+```{r}
+set.seed(1233)
+
+rf1 <- randomForest(SalePrice ~.,
+                  ntree = 300,
+                  mtry = 26,
+                  nodesize = 5, 
+                  data = training.house)
+
+rf1
+```
+
+```{r}
+set.seed(1238343)
+
+rf2 <- randomForest(SalePrice ~.,
+                  ntree = 400,
+                  mtry = 40,
+                  nodesize = 11,
+                  data = training.house)
+
+rf2
+```
+
+```{r}
+set.seed(69348)
+
+rf3 <- randomForest(SalePrice ~.,
+                  ntree = 300,
+                  mtry = 58,
+                  nodesize = 19,
+                  data = training.house)
+
+rf3
+```
+
+It looks like the first model has the best outcome so I will be continuing with rf1.
+
+The chart shows the most important variables as measured by Random Forest. It appears overall quality of the home and if there is a garage are the most important.
+```{r}
+varImpPlot(rf1)
+```
+
+Predict with Random Forest
+
+```{r}
+
+rf.pred <- predict(rf1,newdata = testing.house)
+
+random.forest.rmsle <- rmsle(testing.house$SalePrice, rf.pred)
+
+random.forest.rmsle 
+```
+
+## K-Nearest Neighbors Regression  
+
+```{r include=F}
+
+control <- trainControl(method="repeatedcv", number=10, repeats = 5)
+
+set.seed(754)
+fit.knn <- train(SalePrice~., data=train.house, method="knn",
+                preProcess = c('center', 'scale'),
+                trControl=control)
+
+```
+
+The KNN output uses RMSE to determine that k = 9 is the optimal k for the model.
+
+```{r}
+fit.knn
+```
+
+Predict with KNN
+
+```{r}
+
+knn.pred <- predict(fit.knn, testing.house)
+
+knn.rmsle <- rmsle(knn.pred, testing.house$SalePrice)
+
+knn.rmsle
+```
+
+## Ridge Regression
+
+Creating the training and testing matrices for Ridge and Lasso
+
+```{r}
+
+grid = 10^seq(10,-2, length = 100)
+
+x.matrix.train <- data.matrix(training.house[1:79])
+
+y.matrix.train <- data.matrix(training.house[,"SalePrice"])
+
+x.matrix.test <- data.matrix(testing.house)
+
+y.matrix.test <- data.matrix(testing.house[,"SalePrice"])
+
+ridge.mod.cv <- cv.glmnet(x.matrix.train, y.matrix.train, alpha = 0, lambda = grid)
+
+bestlam <- ridge.mod.cv$lambda.min
+```
+
+Predict with Ridge Regression
+
+```{r}
+ridge.pred <- predict(ridge.mod.cv, s = bestlam, newx = x.matrix.test)
+
+ridge.pred <- ifelse(ridge.pred < 0, 0, ridge.pred)
+
+ridge.rmsle <- rmsle(ridge.pred, y.matrix.test)
+
+ridge.rmsle
+```
+
+## Lasso
+
+```{r}
+lasso.mod.cv <- cv.glmnet(x.matrix.train, y.matrix.train, alpha = 1, lambda = grid)
+
+bestlam <- lasso.mod.cv$lambda.min
+
+```
+
+Predict with Lasso
+
+```{r}
+
+lasso.pred <- predict(lasso.mod.cv, s = bestlam, newx = x.matrix.test)
+
+lasso.pred <- ifelse(lasso.pred < 0, 0, lasso.pred)
+
+lasso.rmsle <- rmsle(lasso.pred, y.matrix.test)
+
+lasso.rmsle
+```
+
+# Model Comparison
+
+With root mean squared log error, the lower the value, the better the performance fit. RMSLE is a common model performance metric to use on regression problems like house price prediction, especially when dealing with outliers. Below I have listed the RMSLE metrics for each model (KNN, Ridge Regression, Lasso, and Random Forest). The models used in this project are mostly highly interpretative, but highly inflexible methods. Random Forest finds itself in the middle by being flexible, but also interpretable. 
+
+Striking a balance between bias and variance in machine learning models can be tricky, but it is necessary in building applicable and scaleable models. The goal is to have a model that is low in both variance and bias in so that it does not over or undrefit on test data. Regression models tend to have a lower variance, but a higher bias. With tree based decision models, they tend to work pretty well, but if there are too many trees, there is a tendency to overfit the data. This may explain why the Random Forest, an ensemble method model, performed best. Tree based decision models usually perform well in this balancing act, but not always.      
+
+The Lasso produces the lowest RMSLE score and so does ridge regression. That almost seems too low and I fear that something may have gone wrong in model performance. Random Forest and KNN seem more realistic. It looks like Random Forest performed the best with an RMSLE score of 0.15. 
+
+```{r}
+lasso.rmsle
+#0.00000007546139
+
+ridge.rmsle
+#0.0003046695
+
+random.forest.rmsle 
+#0.1573435
+
+knn.rmsle
+#0.2283874
+
+```
+
+KNN Plot
+
+Here are the residuals of the KNN model plotted, which leads toward heteroscedasicity.  
+
+```{r}
+res <- resid(fit.knn)
+
+plot(fitted(fit.knn), res)
+
+```
+
+Random Forest plot
+
+The error rate decreases significantly at around 50 trees is sustained indefinitely.
+
+```{r}
+plot(rf1)
+```
+
+## Predicted values plotted against actual values
+
+These plots below represent performance of models by plotting the actual vs predicted values in the testing data set to observe how well they fit each other.
+
+Random Forest
+
+Generally, we want a linear line when comparing the predicted vs actualy values so this Random Forest plot and the next KNN plot look acceptable even though there are a few outliers. Overall, Random Forest is the best with the tightest cluster towards a normal linear line. As mentioned, I wonder if there is some unforseen error in my predictions or creating a matrix for Ridge and Lasso, because the predicted and actual values are right on top of each other.
+
+```{r}
+plot(rf.pred, testing.house$SalePrice)
+```
+
+KNN 
+
+```{r}
+plot(knn.pred, testing.house$SalePrice)
+```
+
+Lasso 
+
+```{r}
+plot(lasso.pred, testing.house$SalePrice)
+```
+
+Ridge regression
+
+```{r}
+plot(ridge.pred, testing.house$SalePrice)
+```
+
+# Conclusion: Ethical Implications
+
+With any machine learning algorithm or model, there is cause for ethical concerns over outcomes of these models, especially in the case of housing price predictions. Like every model, the data used in the training process can lead to some undesirable outcomes. There could be a few ethical concerns about attempting to predict house prices with machine learning models.
+
+1. If data sets to predict house price contain information on race or socioeconomic status, the model may end up further perpetuating discrimination against marginalized groups. It is important to make sure data used in these models is sourced appropriately and does not contain any variables that could damage or harm other individuals.
+
+2. Homeowner privacy may also be of concern. The data set I used was curated and anonymous, but if an organization or individual chose to seek personal information of homeowners (credit score, race, income, etc.), concerns of data privacy may become an issue.
+
+3. Transparency with results must be noted in any research or algorithm that involves a topic as complex as house price prediction. Unforeseen events such as natural disasters or financial crisis's cannot be taken into account when building data sets for prediction. Organizations and researchers must ensure users are aware of how data was collected, on what locations it was collected, and that most models can only predict prices on variables that are known.
+
+The data set I am currently using does not have cause for concern. It was created/curated by Dean De Cock for data science educational purposes. No variables within the data set pertain to any issue of race or socioeconomic status. Variables are restricted to physical features of homes and their immediate location.
+
+
+
+
+
+
+
